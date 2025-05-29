@@ -81,8 +81,6 @@ def get_collection_works(collection_name):
 
 def extract_work_info(work_url):
     # Change the URL ending to .gay in order to mitigate 503 errors and timeouts.
-    # This is a workaround for AO3 rate limiting and server issues.
-    # See this for more info: https://www.reddit.com/r/AO3/comments/1inmlqc/comment/mck5z8w/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
     work_url = work_url.replace("archiveofourown.org", "archiveofourown.gay")
     """Extract and return info for a single work given its URL."""
     headers = {
@@ -135,13 +133,10 @@ def extract_work_info(work_url):
         "kudos": kudos
     }
 
-if __name__ == "__main__":
-    collection_name = input("Enter AO3 collection name: ").strip()
-    works_data = list(get_collection_works(collection_name))
-
+def print_works(works_data):
     # Sort by kudos, then hits (descending)
     works_data.sort(key=lambda x: (x["kudos"], x["hits"]), reverse=True)
-    print(f"\nFound {len(works_data)} works in collection:\n")
+    print(f"\nFound {len(works_data)} works:\n")
     for work in works_data:
         print(work["link"])
         print(f"Title: {work['title']}")
@@ -151,3 +146,23 @@ if __name__ == "__main__":
         print(f"Hits: {work['hits']}, Kudos: {work['kudos']}")
         print("-" * 40)
         print()
+
+if __name__ == "__main__":
+    choice = input("Do you want to provide a list of work URLs (enter 'list') or a collection name (enter 'collection')? ").strip().lower()
+    works_data = []
+    if choice == "collection":
+        collection_name = input("Enter AO3 collection name: ").strip()
+        works_data = list(get_collection_works(collection_name))
+    elif choice == "list":
+        urls = input("Enter AO3 work URLs separated by commas: ").strip().split(",")
+        for url in urls:
+            url = url.strip()
+            if url:
+                info = extract_work_info(url)
+                if info:
+                    works_data.append(info)
+    else:
+        print("Invalid choice. Please enter 'list' or 'collection'.")
+        exit(1)
+
+    print_works(works_data)
