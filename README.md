@@ -18,11 +18,11 @@ This project includes a script to scrape works from an AO3 collection, extract m
 
 1. Clone the repository:
     ```
-    git clone https://github.com/your-username/your-repo.git
+    git clone https://github.com/sameerkhanna786/ao3_reccomender
     ```
 2. Navigate to the project directory:
     ```
-    cd your-repo
+    cd ao3_reccomender
     ```
 3. Create and activate a virtual environment named `ao3_env`:
     ```
