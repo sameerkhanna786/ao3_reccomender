@@ -1,5 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
+from tqdm import tqdm
 
 def get_collection_work_links(collection_name):
     """Return a list of work links from the given AO3 collection."""
@@ -19,7 +20,7 @@ def get_collection_work_links(collection_name):
         if page > 1:
             url = f"{base_url}?page={page}"
         print(f"Fetching: {url}")
-        response = requests.get(url, headers=headers, proxies=proxies, verify=False)
+        response = requests.get(url, headers=headers, proxies=proxies)
         if response.status_code != 200:
             print(f"Failed to fetch page {page}: Status {response.status_code}")
             break
@@ -47,6 +48,10 @@ def get_collection_work_links(collection_name):
     return work_links
 
 def extract_work_info(work_url):
+    # Change the URL ending to .gay in order to mitigate 503 errors and timeouts.
+    # This is a workaround for AO3 rate limiting and server issues.
+    # See this for more info: https://www.reddit.com/r/AO3/comments/1inmlqc/comment/mck5z8w/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
+    work_url = work_url.replace("archiveofourown.org", "archiveofourown.gay")
     """Extract and return info for a single work given its URL."""
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; AO3Scraper/1.0)"
@@ -55,7 +60,7 @@ def extract_work_info(work_url):
         "http": None,
         "https": None
     }
-    response = requests.get(work_url, headers=headers, proxies=proxies, verify=False)
+    response = requests.get(work_url, headers=headers, proxies=proxies)
     if response.status_code != 200:
         print(f"Failed to fetch work: {work_url}")
         return None
@@ -102,7 +107,7 @@ if __name__ == "__main__":
     collection_name = input("Enter AO3 collection name: ").strip()
     work_links = get_collection_work_links(collection_name)
     works_data = []
-    for link in work_links:
+    for link in tqdm(work_links):
         info = extract_work_info(link)
         if info:
             works_data.append(info)
