@@ -1,4 +1,4 @@
-### Example: AO3 Collection Scraper
+### AO3 Collection Scraper
 
 This project includes a script to scrape works from an AO3 collection, extract metadata, and display a sorted summary.
 
