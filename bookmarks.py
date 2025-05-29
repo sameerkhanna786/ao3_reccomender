@@ -52,6 +52,10 @@ def get_collection_works(collection_name):
             fandom_tag = work.select_one("h5.fandoms > a")
             fandom = fandom_tag.get_text(strip=True) if fandom_tag else ""
 
+            # Summary
+            summary_tag = work.select_one("blockquote.userstuff.summary")
+            summary = summary_tag.get_text(strip=True) if summary_tag else ""
+
             # Hits and Kudos
             hits_tag = work.select_one("dl.stats > dd.hits")
             kudos_tag = work.select_one("dl.stats > dd.kudos")
@@ -65,13 +69,14 @@ def get_collection_works(collection_name):
                 kudos = 0
 
             yield {
-                "link": full_link,
-                "title": title,
-                "author": author,
-                "tags": tags,
-                "fandom": fandom,
-                "hits": hits,
-                "kudos": kudos
+            "link": full_link,
+            "title": title,
+            "author": author,
+            "tags": tags,
+            "fandom": fandom,
+            "summary": summary,
+            "hits": hits,
+            "kudos": kudos
             }
 
         next_page = soup.select_one("li.next > a")
@@ -111,6 +116,10 @@ def extract_work_info(work_url):
     fandom_tag = soup.select_one("h5.fandoms > a")
     fandom = fandom_tag.get_text(strip=True) if fandom_tag else ""
 
+    # Summary
+    summary_tag = soup.select_one("div.summary blockquote.userstuff")
+    summary = summary_tag.get_text(strip=True) if summary_tag else ""
+
     # Hits and Kudos
     hits_tag = soup.select_one("dl.stats > dd.hits")
     kudos_tag = soup.select_one("dl.stats > dd.kudos")
@@ -129,6 +138,7 @@ def extract_work_info(work_url):
         "author": author,
         "tags": tags,
         "fandom": fandom,
+        "summary": summary,
         "hits": hits,
         "kudos": kudos
     }
@@ -142,7 +152,8 @@ def print_works(works_data):
         print(f"Title: {work['title']}")
         print(f"Author: {work['author']}")
         print(f"Fandom: {work['fandom']}")
-        # print(f"Tags: {', '.join(work['tags'])}")
+        print(f"Summary: {work['summary']}")
+        print(f"Tags: {', '.join(work['tags'])}")
         print(f"Hits: {work['hits']}, Kudos: {work['kudos']}")
         print("-" * 40)
         print()
