@@ -3,6 +3,8 @@ from bs4 import BeautifulSoup
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 import numpy as np
+from urllib.parse import quote_plus
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 def get_collection_works(collection_name):
     """Yield info dicts for each work in the given AO3 collection."""
@@ -48,8 +50,11 @@ def get_collection_works(collection_name):
             author_tag = work.select_one("a[rel=author]")
             author = author_tag.get_text(strip=True) if author_tag else "Anonymous"
 
-            # Tags
-            tags = [tag.get_text(strip=True) for tag in work.select("ul.tags.commas > li")]
+            # Only include tags under "Additional Tags"
+            additional_tags = []
+            additional_tags_li = work.select("ul.tags.commas > li.freeforms")
+            for li in additional_tags_li:
+                additional_tags.extend([tag.get_text(strip=True) for tag in li.select("a.tag")])
 
             # Fandom
             fandom_tag = work.select_one("h5.fandoms > a")
@@ -72,14 +77,14 @@ def get_collection_works(collection_name):
                 kudos = 0
 
             yield {
-            "link": full_link,
-            "title": title,
-            "author": author,
-            "tags": tags,
-            "fandom": fandom,
-            "summary": summary,
-            "hits": hits,
-            "kudos": kudos
+                "link": full_link,
+                "title": title,
+                "author": author,
+                "tags": additional_tags,
+                "fandom": fandom,
+                "summary": summary,
+                "hits": hits,
+                "kudos": kudos
             }
 
         next_page = soup.select_one("li.next > a")
@@ -161,25 +166,26 @@ def print_works(works_data):
         print("-" * 40)
         print()
 
-def recommend_works_by_tags(works_data, n_topics=10, n_recommendations=5):
+def recommend_works_by_tags(works_data, n_topics=150, n_recommendations=5):
     """
-    Recommend new AO3 works based on tag similarity using LDA.
-    Only recommends completed works not already in works_data.
+    Recommend new AO3 works based on tag similarity using TF-IDF and LDA.
+    Only recommends works not already in works_data.
+    If not enough recommendations are found, iteratively remove the lowest-weighted tag and search again.
     """
-    # Prepare tag documents (tags joined by comma, not space)
+    # Prepare tag documents (tags joined by comma)
     tag_docs = [", ".join(work["tags"]) for work in works_data]
     if not tag_docs or all(doc.strip() == "" for doc in tag_docs):
-        print("No tags found for LDA recommendations.")
+        print("No tags found for recommendations.")
         return []
 
-    # Vectorize tags as phrases (treat each tag as a token)
-    vectorizer = CountVectorizer(tokenizer=lambda x: [tag.strip() for tag in x.split(",") if tag.strip()],
-                                 token_pattern=None)
-    tag_matrix = vectorizer.fit_transform(tag_docs)
+    # Vectorize tags using TF-IDF (treat each tag as a token)
+    tfidf_vectorizer = TfidfVectorizer(tokenizer=lambda x: [tag.strip() for tag in x.split(",") if tag.strip()],
+                                       token_pattern=None)
+    tfidf_matrix = tfidf_vectorizer.fit_transform(tag_docs)
 
-    # Fit LDA
+    # Use LDA on the TF-IDF matrix
     lda = LatentDirichletAllocation(n_components=n_topics, random_state=42)
-    lda_topics = lda.fit_transform(tag_matrix)
+    lda_topics = lda.fit_transform(tfidf_matrix)
 
     # Get top topic(s) for the input works
     avg_topic_dist = np.mean(lda_topics, axis=0)
@@ -188,24 +194,13 @@ def recommend_works_by_tags(works_data, n_topics=10, n_recommendations=5):
     # Build a set of existing work links to avoid recommending duplicates
     existing_links = set(work["link"] for work in works_data)
 
-    # Query AO3 for new works by searching for top tags in the top topic
-    feature_names = np.array(vectorizer.get_feature_names_out())
+    # Get top tags for the top topic using TF-IDF feature names
+    feature_names = np.array(tfidf_vectorizer.get_feature_names_out())
     topic_word_dist = lda.components_[top_topic]
-    top_tag_indices = topic_word_dist.argsort()[::-1][:5]
+    sorted_indices = topic_word_dist.argsort()[::-1]
+    top_tag_indices = sorted_indices[:5]
     top_tags = [feature_names[i] for i in top_tag_indices]
 
-    # Build AO3 search URL using top tags (joined by '+') and completed works only
-    search_tags = "+".join(top_tags)
-    search_url = (
-        "https://archiveofourown.gay/works"
-        "?utf8=✓"
-        f"&work_search%5Bother_tag_names%5D={search_tags}"
-        "&work_search%5Bcomplete%5D=T"
-        "&sort_column=kudos_count"
-        "&commit=Search"
-    )
-
-    print(f"Searching AO3 for new completed works with tags: {', '.join(top_tags)}")
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; AO3Scraper/1.0)"
     }
@@ -213,76 +208,111 @@ def recommend_works_by_tags(works_data, n_topics=10, n_recommendations=5):
         "http": None,
         "https": None
     }
-    response = requests.get(search_url, headers=headers, proxies=proxies, verify=False)
-    if response.status_code != 200:
-        print(f"Failed to fetch search results: Status {response.status_code}")
-        return []
 
-    soup = BeautifulSoup(response.content, "html.parser")
-    works = soup.select("li.work.blurb.group")
     recommendations = []
-    for work in works:
-        # Check for completed status (look for <span class="iswip"> or <dl class="stats">)
-        is_complete = False
-        status_tag = work.select_one("dl.stats > dt.status")
-        if status_tag and "Completed" in status_tag.find_next_sibling("dd").get_text(strip=True):
-            is_complete = True
-        # AO3 also marks incomplete works with <span class="iswip">, so skip if present
-        if work.select_one("span.iswip"):
-            is_complete = False
-        if not is_complete:
-            continue
+    tags_to_try = top_tags.copy()
+    while tags_to_try:
+        search_tags = ", ".join(tags_to_try)
+        encoded_tags = quote_plus(search_tags)
+        print(f"Searching AO3 for new works with tags: {', '.join(tags_to_try)}")
 
-        link_tag = work.select_one("div.header > h4 > a")
-        if not link_tag:
-            continue
-        href = link_tag.get("href")
-        if not href:
-            continue
-        full_link = f"https://archiveofourown.org{href}"
-        if full_link in existing_links:
-            continue  # Skip already known works
+        search_url = (
+            "https://archiveofourown.gay/works/search?"
+            "work_search%5Bquery%5D=&"
+            "work_search%5Btitle%5D=&"
+            "work_search%5Bcreators%5D=&"
+            "work_search%5Brevised_at%5D=&"
+            "work_search%5Bcomplete%5D=&"
+            "work_search%5Bcrossover%5D=&"
+            "work_search%5Bsingle_chapter%5D=0&"
+            "work_search%5Bword_count%5D=&"
+            "work_search%5Blanguage_id%5D=&"
+            "work_search%5Bfandom_names%5D=&"
+            "work_search%5Brating_ids%5D=&"
+            "work_search%5Bcharacter_names%5D=&"
+            "work_search%5Brelationship_names%5D=&"
+            f"work_search%5Bfreeform_names%5D={encoded_tags}&"
+            "work_search%5Bhits%5D=&"
+            "work_search%5Bkudos_count%5D=&"
+            "work_search%5Bcomments_count%5D=&"
+            "work_search%5Bbookmarks_count%5D=&"
+            "work_search%5Bsort_column%5D=kudos_count&"
+            "work_search%5Bsort_direction%5D=desc&"
+            "commit=Search"
+        )
 
-        # Title
-        title = link_tag.get_text(strip=True)
-        # Author
-        author_tag = work.select_one("a[rel=author]")
-        author = author_tag.get_text(strip=True) if author_tag else "Anonymous"
-        # Tags
-        tags = [tag.get_text(strip=True) for tag in work.select("ul.tags.commas > li")]
-        # Fandom
-        fandom_tag = work.select_one("h5.fandoms > a")
-        fandom = fandom_tag.get_text(strip=True) if fandom_tag else ""
-        # Summary
-        summary_tag = work.select_one("blockquote.userstuff.summary")
-        summary = summary_tag.get_text(strip=True) if summary_tag else ""
-        # Hits and Kudos
-        hits_tag = work.select_one("dl.stats > dd.hits")
-        kudos_tag = work.select_one("dl.stats > dd.kudos")
-        try:
-            hits = int(hits_tag.get_text(strip=True).replace(',', '')) if hits_tag else 0
-        except Exception:
-            hits = 0
-        try:
-            kudos = int(kudos_tag.get_text(strip=True).replace(',', '')) if kudos_tag else 0
-        except Exception:
-            kudos = 0
+        print(f"Fetching search results from: {search_url}")
 
-        recommendations.append({
-            "link": full_link,
-            "title": title,
-            "author": author,
-            "tags": tags,
-            "fandom": fandom,
-            "summary": summary,
-            "hits": hits,
-            "kudos": kudos
-        })
+        response = requests.get(search_url, headers=headers, proxies=proxies, verify=False)
+        if response.status_code != 200:
+            print(f"Failed to fetch search results: Status {response.status_code}")
+            break
+
+        soup = BeautifulSoup(response.content, "html.parser")
+        works = soup.select("li.work.blurb.group")
+
+        for work in works:
+            link_tag = work.select_one("div.header > h4 > a")
+            if not link_tag:
+                continue
+            href = link_tag.get("href")
+            if not href:
+                continue
+            full_link = f"https://archiveofourown.org{href}"
+            if full_link in existing_links or any(r["link"] == full_link for r in recommendations):
+                continue  # Skip already known or already recommended works
+
+            # Tags
+            tags = [tag.get_text(strip=True) for tag in work.select("ul.tags.commas > li")]
+
+            # Title
+            title = link_tag.get_text(strip=True)
+            # Author
+            author_tag = work.select_one("a[rel=author]")
+            author = author_tag.get_text(strip=True) if author_tag else "Anonymous"
+            # Fandom
+            fandom_tag = work.select_one("h5.fandoms > a")
+            fandom = fandom_tag.get_text(strip=True) if fandom_tag else ""
+            # Summary
+            summary_tag = work.select_one("blockquote.userstuff.summary")
+            summary = summary_tag.get_text(strip=True) if summary_tag else ""
+            # Hits and Kudos
+            hits_tag = work.select_one("dl.stats > dd.hits")
+            kudos_tag = work.select_one("dl.stats > dd.kudos")
+            try:
+                hits = int(hits_tag.get_text(strip=True).replace(',', '')) if hits_tag else 0
+            except Exception:
+                hits = 0
+            try:
+                kudos = int(kudos_tag.get_text(strip=True).replace(',', '')) if kudos_tag else 0
+            except Exception:
+                kudos = 0
+
+            recommendations.append({
+                "link": full_link,
+                "title": title,
+                "author": author,
+                "tags": tags,
+                "fandom": fandom,
+                "summary": summary,
+                "hits": hits,
+                "kudos": kudos
+            })
+
+            if len(recommendations) >= n_recommendations:
+                break
 
         if len(recommendations) >= n_recommendations:
             break
 
-    return recommendations
+        # Remove the lowest-weighted tag and try again
+        if len(tags_to_try) > 1:
+            tags_to_try = tags_to_try[:-1]
+            print(f"Not enough recommendations found. Trying with fewer tags: {', '.join(tags_to_try)}")
+        else:
+            break
+
+    return recommendations[:n_recommendations]
 
 if __name__ == "__main__":
     choice = input("Do you want to provide a list of work URLs (enter 'list') or a collection name (enter 'collection')? ").strip().lower()
@@ -302,7 +332,7 @@ if __name__ == "__main__":
         print("Invalid choice. Please enter 'list' or 'collection'.")
         exit(1)
 
-    print_works(works_data)
+    # print_works(works_data)
 
     # Provide recommendations for the list of works
     if works_data:
